@@ -15,12 +15,12 @@
 
 ---
 
-Traducao automatizada de legendas SRT em arquivos MKV usando LibreTranslate local. Processa bibliotecas de filmes e series, convertendo legendas EN → PT-BR de forma completamente offline.
+Traducao automatizada de legendas SRT em arquivos MKV usando LibreTranslate local. Processa bibliotecas de filmes e series, extrai PT-BR embutido quando existe e converte legendas EN -> PT-BR de forma completamente offline.
 
 ## Funcionalidades
 
 - **Offline** — LibreTranslate local, sem envio de dados para APIs externas
-- **Inteligente** — pula arquivos ja processados ou com legendas em portugues
+- **Inteligente** — pula arquivos ja processados, extrai PT-BR embutido e traduz apenas o que falta
 - **Batch** — varre recursivamente diretorios de filmes e series
 - **Agendavel** — roda via crontab, processa apenas o que e novo
 
@@ -38,11 +38,11 @@ volumes:
   - /caminho/scripts:/app
   - /caminho/movies:/movies
   - /caminho/tv:/tv
-  - /caminho/temp:/temp
 ```
 
 ```bash
-docker compose up -d
+docker compose up -d libretranslate
+docker compose run --rm legendas
 ```
 
 ## Agendamento (opcional)
@@ -51,34 +51,35 @@ docker compose up -d
 crontab -e
 
 # Processa legendas diariamente as 03:00
-0 3 * * * cd /caminho/subtitle-auto-translator && /usr/bin/docker compose up -d
+0 3 * * * cd /caminho/subtitle-auto-translator && /usr/bin/docker compose run --rm legendas
 
-# Para containers aos domingos as 04:00
+# Para o LibreTranslate aos domingos as 04:00
 0 4 * * 0 cd /caminho/subtitle-auto-translator && /usr/bin/docker compose down
 ```
 
 ## Como funciona
 
-1. Varre `/movies` e `/tv` em busca de `.mkv`
-2. Pula se ja existe `.pt-BR.srt` ou legenda PT embutida
+1. Varre `/movies`, `/tv` e os caminhos opcionais de `EXTRA_MEDIA_DIRS` em busca de `.mkv`
+2. Pula se ja existe `.pt-BR.srt`
 3. Reutiliza `.en.srt` se ja foi extraido antes
-4. Extrai legenda EN do MKV via MKVToolNix
-5. Traduz linha por linha via LibreTranslate
-6. Salva `.pt-BR.srt` no mesmo diretorio
+4. Extrai legenda PT/BR embutida quando existe em formato texto
+5. Extrai legenda EN do MKV via MKVToolNix quando precisa traduzir
+6. Traduz linha por linha via LibreTranslate local
+7. Salva `.pt-BR.srt` no mesmo diretorio
 
-Legendas SUP/PGS (formato grafico) sao registradas em `/temp/legendassup.txt` para revisao manual.
+Legendas SUP/PGS (formato grafico) sao registradas em `/app/temp/legendassup.txt` para revisao manual.
 
 ## Stack
 
 - Python 3 + requests + tqdm
-- [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) (container Docker, ~1GB de modelos)
+- [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) local em Docker
 - [MKVToolNix](https://mkvtoolnix.download/) (extracao de legendas)
 - Docker Compose
 
 ## Requisitos
 
 - Docker + Docker Compose
-- ~1GB de disco para modelos de traducao
+- Espaco em disco para os modelos do LibreTranslate
 - Arquivos MKV com legendas SRT em ingles
 
 ---
