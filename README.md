@@ -16,13 +16,13 @@
 
 ---
 
-Traducao automatizada de legendas SRT em arquivos MKV. O fluxo extrai PT-BR embutido quando existe, usa Gemini API como tradutor principal para EN -> PT-BR e cai para LibreTranslate local quando o Gemini falha.
+Traducao automatizada de legendas SRT em arquivos MKV. O fluxo para quando encontra legenda PT/BR embutida, usa Gemini API como tradutor principal para EN -> PT-BR quando precisa traduzir e cai para LibreTranslate local quando o Gemini falha.
 
 ## Funcionalidades
 
 - **Gemini primeiro** — usa `gemini-2.5-flash-lite` quando `GEMINI_API_KEY` esta disponivel
 - **Fallback local** — LibreTranslate local traduz quando o Gemini falha ou quando nao ha chave configurada
-- **Inteligente** — pula arquivos ja processados, extrai PT-BR embutido e traduz apenas o que falta
+- **Inteligente** — pula arquivos ja processados, respeita PT/BR embutido e traduz apenas o que falta
 - **Batch** — varre recursivamente diretorios de filmes e series
 - **Agendavel** — roda via crontab, processa apenas o que e novo
 
@@ -66,7 +66,7 @@ crontab -e
 1. Varre `/movies`, `/tv` e os caminhos opcionais de `EXTRA_MEDIA_DIRS` em busca de `.mkv`
 2. Pula se ja existe `.pt-BR.srt`
 3. Reutiliza `.en.srt` se ja foi extraido antes
-4. Extrai legenda PT/BR embutida quando existe em formato texto
+4. Se existe legenda PT/BR embutida, para o processamento desse arquivo
 5. Extrai legenda EN do MKV via MKVToolNix quando precisa traduzir
 6. Traduz via Gemini API
 7. Usa LibreTranslate local como fallback se o Gemini falhar
