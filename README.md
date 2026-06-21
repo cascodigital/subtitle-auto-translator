@@ -46,6 +46,7 @@ env_file:
 
 ```bash
 docker compose up -d libretranslate
+docker compose build legendas
 docker compose run --rm legendas
 ```
 
@@ -79,7 +80,7 @@ Legendas SUP/PGS (formato grafico) sao registradas em `/app/temp/legendassup.txt
 - Python 3 + requests + tqdm
 - Gemini API (`gemini_api_translate_srt.py`)
 - [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) local em Docker
-- [MKVToolNix](https://mkvtoolnix.download/) (extracao de legendas)
+- [MKVToolNix](https://mkvtoolnix.download/) na imagem Docker (extracao de legendas)
 - Docker Compose
 
 ## Requisitos

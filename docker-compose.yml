@@ -21,7 +21,8 @@ services:
 
   legendas:
     container_name: legendas
-    image: python:3.9-slim
+    build: .
+    image: subtitle-auto-translator:latest
     depends_on:
       libretranslate:
         condition: service_healthy
@@ -40,11 +41,7 @@ services:
       - GEMINI_RETRIES=3
       - PROCESS_EXISTING_EN_ONLY=0
     working_dir: /app
-    command: >
-      bash -c "apt-get update &&
-      apt-get install -y --no-install-recommends mkvtoolnix &&
-      pip install requests pysrt tqdm &&
-      python /app/translate_subtitles.py"
+    command: ["python", "/app/translate_subtitles.py"]
     networks:
       - legendas_network
 
