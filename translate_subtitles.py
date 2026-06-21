@@ -22,6 +22,12 @@ TV_DIR = "/tv"
 SUP_LOG_FILE = "/app/temp/legendassup.txt"
 TEMP_DIR = "/app/temp"
 TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL", "http://libretranslate:5000/translate")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MAX_CHARS = os.environ.get("GEMINI_MAX_CHARS", "600")
+GEMINI_TIMEOUT = os.environ.get("GEMINI_TIMEOUT", "180")
+GEMINI_RETRIES = os.environ.get("GEMINI_RETRIES", "3")
+GEMINI_SCRIPT = os.environ.get("GEMINI_SCRIPT", "/app/gemini_api_translate_srt.py")
 PROCESS_EXISTING_EN_ONLY = os.environ.get("PROCESS_EXISTING_EN_ONLY", "0") == "1"
 EXTRA_MEDIA_DIRS = [
     path.strip()
@@ -157,6 +163,33 @@ def translate_subtitle(input_file, output_file):
         if not os.path.exists(input_file):
             logging.error("Arquivo de legenda nao existe: %s", input_file)
             return False
+        if GEMINI_API_KEY:
+            cmd = [
+                "python",
+                GEMINI_SCRIPT,
+                input_file,
+                output_file,
+                "--model",
+                GEMINI_MODEL,
+                "--max-chars",
+                GEMINI_MAX_CHARS,
+                "--timeout",
+                GEMINI_TIMEOUT,
+                "--retries",
+                GEMINI_RETRIES,
+            ]
+            logging.info(
+                "Traduzindo via Gemini API: model=%s max_chars=%s timeout=%s retries=%s",
+                GEMINI_MODEL,
+                GEMINI_MAX_CHARS,
+                GEMINI_TIMEOUT,
+                GEMINI_RETRIES,
+            )
+            result = subprocess.run(cmd, timeout=7200)
+            if result.returncode == 0 and os.path.exists(output_file):
+                return True
+            logging.error("Gemini falhou com exit code %s; usando LibreTranslate local como fallback", result.returncode)
+
         with open(input_file, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
         blocks = re.split(r'\n\s*\n', content)
@@ -211,24 +244,12 @@ def process_file(mkv_file):
             return
         logging.info("Faixas encontradas: %s", subtitle_tracks)
 
-        portuguese_text_track = None
-        for track in subtitle_tracks:
-            language = track.get("language")
-            track_name = (track.get("track_name") or "").lower()
-            codec = (track.get("codec") or "").lower()
-            is_portuguese = language in ["por", "pt", "pt-BR", "pt-br", "portuguese", "portugues"]
-            is_brazilian = "brazil" in track_name or "brasil" in track_name or "br" == track_name.strip()
-            if is_portuguese and not any(marker in codec for marker in ["sup", "hdmv", "pgs"]):
-                if portuguese_text_track is None or is_brazilian:
-                    portuguese_text_track = track
-                if is_brazilian:
-                    break
-        if portuguese_text_track:
-            logging.info("Extraindo legenda PT embutida: %s (ID: %s)", mkv_file, portuguese_text_track["id"])
-            if extract_subtitle(mkv_file, portuguese_text_track["id"], pt_br_subtitle):
-                logging.info("Legenda PT-BR extraida com sucesso: %s", pt_br_subtitle)
-            else:
-                logging.error("Falha ao extrair legenda PT embutida: %s", mkv_file)
+        has_portuguese = any(
+            track.get("language") in ["por", "pt", "pt-BR", "pt-br", "portuguese", "portugues"]
+            for track in subtitle_tracks
+        )
+        if has_portuguese:
+            logging.info("Ja possui legenda PT: %s", mkv_file)
             return
 
         english_text_track = None
@@ -281,19 +302,20 @@ def main():
     logging.info("Iniciando o processo de traducao de legendas")
     os.makedirs(os.path.dirname(SUP_LOG_FILE), exist_ok=True)
 
-    try:
-        test_response = requests.post(
-            TRANSLATE_API_URL,
-            data=json.dumps({"q": "Hello", "source": "en", "target": "pt"}),
-            headers={"Content-Type": "application/json"},
-            timeout=30
-        )
-        logging.info("Backend local LibreTranslate: %d - %s", test_response.status_code, test_response.text)
-        if test_response.status_code != 200:
+    if GEMINI_API_KEY:
+        logging.info("Backend de traducao: Gemini API (%s)", GEMINI_MODEL)
+    else:
+        try:
+            test_response = requests.post(
+                TRANSLATE_API_URL,
+                data=json.dumps({"q": "Hello", "source": "en", "target": "pt"}),
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+            logging.info("Teste API: %d - %s", test_response.status_code, test_response.text)
+        except Exception as e:
+            logging.error("API inacessivel: %s", e)
             return
-    except Exception as e:
-        logging.error("LibreTranslate local inacessivel: %s", e)
-        return
 
     if PROCESS_EXISTING_EN_ONLY:
         pending_subtitles = get_pending_en_subtitles()

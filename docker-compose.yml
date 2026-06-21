@@ -29,9 +29,15 @@ services:
       - /dados/dockers/legendas:/app
       - /dados/movies:/movies
       - /dados/tv:/tv
+    env_file:
+      - /dados/dockers/claude/ai/config/mimi_api.txt
     environment:
       - TZ=America/Sao_Paulo
       - TRANSLATE_API_URL=http://libretranslate:5000/translate
+      - GEMINI_MODEL=gemini-2.5-flash-lite
+      - GEMINI_MAX_CHARS=600
+      - GEMINI_TIMEOUT=180
+      - GEMINI_RETRIES=3
       - PROCESS_EXISTING_EN_ONLY=0
     working_dir: /app
     command: >
