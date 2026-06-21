@@ -1,12 +1,19 @@
+<div align="center">
+
 # Subtitle Auto Translator
 
-![Status](https://img.shields.io/badge/Status-Active-brightgreen)
-![License](https://img.shields.io/badge/License-MIT-blue)
-![Author](https://img.shields.io/badge/Author-Casco%20Digital-orange)
+**Offline SRT subtitle extraction and translation for MKV media libraries.**
 
+![Status](https://img.shields.io/badge/Status-Active-16A34A?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-2563EB?style=flat-square)
+![Casco Digital](https://img.shields.io/badge/Casco-Digital-111827?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![LibreTranslate](https://img.shields.io/badge/LibreTranslate-Offline-00D9FF?style=flat-square)
+
+</div>
+
+---
 
 Traducao automatizada de legendas SRT em arquivos MKV usando LibreTranslate local. Processa bibliotecas de filmes e series, convertendo legendas EN → PT-BR de forma completamente offline.
 
