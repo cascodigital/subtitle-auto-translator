@@ -44,6 +44,8 @@ env_file:
   - /caminho/arquivo-com-GEMINI_API_KEY.env
 ```
 
+Ou use `.env.example` como base para criar um arquivo local com a chave Gemini.
+
 ```bash
 docker compose up -d libretranslate
 docker compose build legendas

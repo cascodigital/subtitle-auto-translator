@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+subtitle_translator.log
+temp/
+*.srt
+*.mkv
+README.md
