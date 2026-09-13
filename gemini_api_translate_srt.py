@@ -17,13 +17,17 @@ from typing import Optional
 
 TIMESTAMP_RE = re.compile(r"^\d\d:\d\d:\d\d,\d{3}\s+-->\s+\d\d:\d\d:\d\d,\d{3}")
 
+# Gemini HTTP 429 is almost always per-minute rate limit, not spending cap: backing off succeeds.
+QUOTA_RETRIES = int(os.environ.get("GEMINI_QUOTA_RETRIES", "6"))
+QUOTA_WAIT = float(os.environ.get("GEMINI_QUOTA_WAIT", "30"))
+
 
 class RecitationError(RuntimeError):
     """Gemini refused the batch with finishReason=RECITATION (copyright filter). Deterministic - do not retry."""
 
 
 class QuotaError(RuntimeError):
-    """Gemini HTTP 429 (rate limit or monthly spending cap). Global - abort the file, never write bogus output."""
+    """Gemini HTTP 429 (rate limit or spending cap)."""
 
 
 @dataclass
@@ -86,7 +90,7 @@ def extract_json(raw: str) -> list[dict]:
     try:
         parsed, _ = json.JSONDecoder().raw_decode(candidate)
     except json.JSONDecodeError:
-        # Cheap models occasionally emit invalid JSON escapes such as "\?".
+        # Some models occasionally emit invalid JSON escapes such as "\?".
         sanitized = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", candidate)
         parsed, _ = json.JSONDecoder().raw_decode(sanitized)
     if not isinstance(parsed, list):
@@ -128,13 +132,20 @@ def read_api_key(api_key_file: Optional[Path]) -> str:
     raise SystemExit("GEMINI_API_KEY is required")
 
 
-def call_gemini(batch: list[tuple[int, str]], api_key: str, model: str, timeout: int) -> tuple[dict[int, str], dict[str, int]]:
+def call_gemini(
+    batch: list[tuple[int, str]],
+    api_key: str,
+    model: str,
+    timeout: int,
+    source_lang: str = "English",
+    target_lang: str = "Brazilian Portuguese",
+) -> tuple[dict[int, str], dict[str, int]]:
     payload = [{"i": idx, "text": text} for idx, text in batch]
     prompt = (
-        "Translate the JSON array subtitle texts from English to Brazilian Portuguese. "
+        f"Translate the JSON array subtitle texts from {source_lang} to {target_lang}. "
         "Return only a valid JSON array, no markdown. Preserve every i exactly. Preserve line breaks, "
         "SRT tags such as <i>, speaker labels, punctuation, and sound-effect parentheses. "
-        "Schema: [{\"i\": number, \"text\": string}]\n\n"
+        f"Schema: [{{\"i\": number, \"text\": string}}]\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
     body = {
@@ -151,12 +162,11 @@ def call_gemini(batch: list[tuple[int, str]], api_key: str, model: str, timeout:
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ],
     }
-    query = urllib.parse.urlencode({"key": api_key})
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?{query}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     req = urllib.request.Request(
         url,
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
         method="POST",
     )
     try:
@@ -165,42 +175,37 @@ def call_gemini(batch: list[tuple[int, str]], api_key: str, model: str, timeout:
                 data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
-            detail = ""
+            body_text = ""
             try:
-                detail = exc.read().decode("utf-8", errors="replace")[:160]
+                body_text = exc.read().decode("utf-8", errors="replace")
             except Exception:
                 pass
-            raise QuotaError(f"Gemini 429 quota/spending cap: {detail}")
+            retry_after = None
+            hit = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', body_text)
+            if hit:
+                retry_after = float(hit.group(1))
+            err = QuotaError(f"Gemini 429 rate limit/quota: {body_text[:160]}")
+            err.retry_after = retry_after
+            raise err
         raise
     candidate = data["candidates"][0]
     if "content" not in candidate:
-        finish_reason = candidate.get("finishReason", "UNKNOWN")
-        safety = candidate.get("safetyRatings", [])
-        msg = f"Gemini returned no content: finishReason={finish_reason} safetyRatings={safety}"
-        if finish_reason == "RECITATION":
-            raise RecitationError(msg)
-        raise RuntimeError(msg)
-    parts = candidate["content"]["parts"]
-    content = "".join(part.get("text", "") for part in parts)
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        parsed = extract_json(content)
-    if isinstance(parsed, dict):
-        parsed = parsed.get("items") or parsed.get("translations") or parsed.get("result")
-    if not isinstance(parsed, list):
-        raise ValueError(f"Unexpected JSON response shape: {type(parsed).__name__}")
-    translated = {int(item["i"]): str(item["text"]) for item in parsed}
-    expected = {idx for idx, _ in batch}
-    if not expected.issubset(set(translated)):
-        missing = sorted(expected - set(translated))
-        extra = sorted(set(translated) - expected)
-        raise ValueError(f"Index mismatch: missing={missing[:10]} extra={extra[:10]}")
-    extra = sorted(set(translated) - expected)
-    if extra:
-        print(f"ignoring extra indexes: {extra[:10]}", flush=True)
-        translated = {idx: translated[idx] for idx in expected}
-    return translated, usage_counts(data)
+        finish = candidate.get("finishReason")
+        if finish == "RECITATION":
+            raise RecitationError(f"Gemini rejected batch with finishReason={finish}")
+        raise ValueError(f"Gemini returned empty candidate with finishReason={finish}: {data}")
+    raw_text = candidate["content"]["parts"][0]["text"]
+    parsed = extract_json(raw_text)
+    mapping: dict[int, str] = {}
+    for item in parsed:
+        if not isinstance(item, dict) or "i" not in item or "text" not in item:
+            continue
+        mapping[int(item["i"])] = str(item["text"])
+    expected_indices = {idx for idx, _ in batch}
+    missing = expected_indices - set(mapping.keys())
+    if missing:
+        raise ValueError(f"Gemini omitted {len(missing)} cues in batch: sample={sorted(missing)[:5]}")
+    return mapping, usage_counts(data)
 
 
 def translate_batch(
@@ -211,18 +216,31 @@ def translate_batch(
     model: str,
     retries: int,
     timeout: int,
+    source_lang: str = "English",
+    target_lang: str = "Brazilian Portuguese",
 ) -> tuple[dict[int, str], dict[str, int]]:
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     last_error: Optional[Exception] = None
-    for attempt in range(1, retries + 1):
+    quota_waits = 0
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             print(f"batch {batch_no}/{total_batches} attempt {attempt}/{retries}", flush=True)
-            translated, usage = call_gemini(batch, api_key, model, timeout)
+            translated, usage = call_gemini(batch, api_key, model, timeout, source_lang=source_lang, target_lang=target_lang)
             for key in usage_total:
                 usage_total[key] += usage.get(key, 0)
             return translated, usage_total
-        except QuotaError:
-            print(f"batch {batch_no}/{total_batches} QUOTA/CAP 429 - Gemini budget exhausted, aborting", flush=True)
+        except QuotaError as exc:
+            quota_waits += 1
+            if quota_waits <= QUOTA_RETRIES:
+                wait = getattr(exc, "retry_after", None) or QUOTA_WAIT
+                wait = min(max(float(wait), 5.0), 120.0)
+                print(f"batch {batch_no}/{total_batches} 429 rate limit - waiting {wait:.0f}s ({quota_waits}/{QUOTA_RETRIES})", flush=True)
+                time.sleep(wait)
+                attempt -= 1
+                continue
+            print(f"batch {batch_no}/{total_batches} QUOTA/CAP 429 - {QUOTA_RETRIES} retries exhausted, aborting", flush=True)
             raise
         except RecitationError:
             print(f"batch {batch_no}/{total_batches} RECITATION - copyright filter, no retry; falling back", flush=True)
@@ -244,7 +262,12 @@ def translate_batch(
     raise RuntimeError(f"Gemini batch {batch_no}/{total_batches} failed after {retries} attempts: {last_error}")
 
 
-def libretranslate_batch(batch: list[tuple[int, str]], url: str) -> dict[int, str]:
+def libretranslate_batch(
+    batch: list[tuple[int, str]],
+    url: str,
+    source: str = "en",
+    target: str = "pt",
+) -> dict[int, str]:
     """Fallback translator: local LibreTranslate (free). Per-cue; keeps original on failure."""
     out: dict[int, str] = {}
     for idx, text in batch:
@@ -254,7 +277,7 @@ def libretranslate_batch(batch: list[tuple[int, str]], url: str) -> dict[int, st
         try:
             req = urllib.request.Request(
                 url,
-                data=json.dumps({"q": text, "source": "en", "target": "pt", "format": "text"}).encode("utf-8"),
+                data=json.dumps({"q": text, "source": source, "target": target, "format": "text"}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
@@ -275,6 +298,10 @@ def recover_batch(
     model: str,
     timeout: int,
     libre_url: str,
+    source_lang: str = "English",
+    target_lang: str = "Brazilian Portuguese",
+    libre_source: str = "en",
+    libre_target: str = "pt",
 ) -> dict[int, str]:
     """Per-cue recovery for a batch the model refused (usually RECITATION).
     A single cue rarely trips the copyright filter, so retry each alone on Gemini;
@@ -286,7 +313,7 @@ def recover_batch(
             out[idx] = text
             continue
         try:
-            single, _ = call_gemini([(idx, text)], api_key, model, timeout)
+            single, _ = call_gemini([(idx, text)], api_key, model, timeout, source_lang=source_lang, target_lang=target_lang)
             out[idx] = single.get(idx, text)
         except QuotaError:
             raise
@@ -296,8 +323,8 @@ def recover_batch(
             print(f"  cue {idx + 1} single retry failed: {type(exc).__name__}: {exc}", flush=True)
             still_blocked.append((idx, text))
     if still_blocked:
-        print(f"  {len(still_blocked)} cue(s) still blocked - LibreTranslate/original", flush=True)
-        out.update(libretranslate_batch(still_blocked, libre_url))
+        print(f"  {len(still_blocked)} cue(s) still blocked - LibreTranslate/original fallback", flush=True)
+        out.update(libretranslate_batch(still_blocked, libre_url, source=libre_source, target=libre_target))
     return out
 
 
@@ -312,11 +339,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Translate SRT text via Gemini API.")
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--model", default="gemini-2.5-flash-lite")
-    parser.add_argument("--max-chars", type=int, default=9000)
-    parser.add_argument("--retries", type=int, default=3)
-    parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite"))
+    parser.add_argument("--max-chars", type=int, default=int(os.environ.get("GEMINI_MAX_CHARS", "2500")))
+    parser.add_argument("--retries", type=int, default=int(os.environ.get("GEMINI_RETRIES", "3")))
+    parser.add_argument("--timeout", type=int, default=int(os.environ.get("GEMINI_TIMEOUT", "180")))
     parser.add_argument("--api-key-file", type=Path, default=Path("/dados/dockers/claude/ai/config/mimi_api.txt"))
+    parser.add_argument("--source-lang", default=os.environ.get("SOURCE_LANG_NAME", "English"))
+    parser.add_argument("--target-lang", default=os.environ.get("TARGET_LANG_NAME", "Brazilian Portuguese"))
+    parser.add_argument("--libre-source", default=os.environ.get("LIBRETRANSLATE_SOURCE", "en"))
+    parser.add_argument("--libre-target", default=os.environ.get("LIBRETRANSLATE_TARGET", "pt"))
     args = parser.parse_args()
 
     api_key = read_api_key(args.api_key_file)
@@ -330,24 +361,46 @@ def main() -> int:
     progress_output = args.output.with_name(args.output.name + ".partial")
     print(f"input={args.input}", flush=True)
     print(f"output={args.output}", flush=True)
-    print(f"cues={len(cues)} batches={len(batches)} model={args.model}", flush=True)
+    print(f"cues={len(cues)} batches={len(batches)} model={args.model} translation={args.source_lang}->{args.target_lang}", flush=True)
 
     for batch_no, batch in enumerate(batches, start=1):
         first = batch[0][0] + 1
         last = batch[-1][0] + 1
         print(f"batch {batch_no}/{len(batches)} cues {first}-{last}", flush=True)
         try:
-            translated, usage = translate_batch(batch_no, len(batches), batch, api_key, args.model, args.retries, args.timeout)
+            translated, usage = translate_batch(
+                batch_no,
+                len(batches),
+                batch,
+                api_key,
+                args.model,
+                args.retries,
+                args.timeout,
+                source_lang=args.source_lang,
+                target_lang=args.target_lang,
+            )
             for key in usage_total:
                 usage_total[key] += usage.get(key, 0)
         except QuotaError:
-            print(f"batch {batch_no}/{len(batches)} ABORT: Gemini 429 quota/spending cap - stopping file, nothing written as final (retry after cap resets)", flush=True)
+            print(f"batch {batch_no}/{len(batches)} ABORT: Gemini 429 quota/spending cap - stopping file, nothing written as final", flush=True)
             raise
         except Exception as exc:
             print(f"batch {batch_no}/{len(batches)} Gemini batch refused ({type(exc).__name__}) - per-cue recovery", flush=True)
             fallback_batches += 1
             try:
-                translated = recover_batch(batch_no, len(batches), batch, api_key, args.model, args.timeout, libre_url)
+                translated = recover_batch(
+                    batch_no,
+                    len(batches),
+                    batch,
+                    api_key,
+                    args.model,
+                    args.timeout,
+                    libre_url,
+                    source_lang=args.source_lang,
+                    target_lang=args.target_lang,
+                    libre_source=args.libre_source,
+                    libre_target=args.libre_target,
+                )
             except Exception as fexc:
                 print(f"batch {batch_no}/{len(batches)} fallback also failed: {type(fexc).__name__}: {fexc}; keeping original", flush=True)
                 failed_batches += 1

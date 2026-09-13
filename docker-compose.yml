@@ -1,6 +1,8 @@
 services:
   libretranslate:
     container_name: libretranslate
+    labels:
+      - "keep=true"
     image: libretranslate/libretranslate:latest
     restart: unless-stopped
     ports:
@@ -21,25 +23,27 @@ services:
 
   legendas:
     container_name: legendas
+    labels:
+      - "keep=true"
     build: .
     image: subtitle-auto-translator:latest
     depends_on:
       libretranslate:
         condition: service_healthy
     volumes:
-      - /dados/dockers/legendas:/app
-      - /dados/movies:/movies
-      - /dados/tv:/tv
+      - .:/app
+      - /path/to/movies:/movies
+      - /path/to/tv:/tv
     env_file:
-      - /dados/dockers/claude/ai/config/mimi_api.txt
+      - .env
     environment:
       - TZ=America/Sao_Paulo
       - TRANSLATE_API_URL=http://libretranslate:5000/translate
       - GEMINI_MODEL=gemini-2.5-flash-lite
-      - GEMINI_MAX_CHARS=600
+      - GEMINI_MAX_CHARS=2500
       - GEMINI_TIMEOUT=180
       - GEMINI_RETRIES=3
-      - PROCESS_EXISTING_EN_ONLY=0
+      - PROCESS_EXISTING_SOURCE_ONLY=0
     working_dir: /app
     command: ["python", "/app/translate_subtitles.py"]
     networks:
