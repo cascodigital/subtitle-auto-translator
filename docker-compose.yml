@@ -35,15 +35,21 @@ services:
       - /path/to/movies:/movies
       - /path/to/tv:/tv
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      - TZ=America/Sao_Paulo
-      - TRANSLATE_API_URL=http://libretranslate:5000/translate
-      - GEMINI_MODEL=gemini-2.5-flash-lite
-      - GEMINI_MAX_CHARS=2500
-      - GEMINI_TIMEOUT=180
-      - GEMINI_RETRIES=3
-      - PROCESS_EXISTING_SOURCE_ONLY=0
+      - TZ=${TZ:-America/Sao_Paulo}
+      - TRANSLATE_API_URL=${TRANSLATE_API_URL:-http://libretranslate:5000/translate}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      - GEMINI_MAX_CHARS=${GEMINI_MAX_CHARS:-2500}
+      - GEMINI_TIMEOUT=${GEMINI_TIMEOUT:-180}
+      - GEMINI_RETRIES=${GEMINI_RETRIES:-3}
+      - PROCESS_EXISTING_SOURCE_ONLY=${PROCESS_EXISTING_SOURCE_ONLY:-0}
+      - SOURCE_LANG=${SOURCE_LANG:-en}
+      - TARGET_LANG=${TARGET_LANG:-pt-BR}
+      - SOURCE_LANG_NAME=${SOURCE_LANG_NAME:-English}
+      - TARGET_LANG_NAME=${TARGET_LANG_NAME:-Brazilian Portuguese}
+      - ENABLE_PGS_OCR=${ENABLE_PGS_OCR:-0}
     working_dir: /app
     command: ["python", "/app/translate_subtitles.py"]
     networks:
