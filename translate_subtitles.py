@@ -43,6 +43,9 @@ LIBRETRANSLATE_TARGET = os.environ.get("LIBRETRANSLATE_TARGET", "pt")
 SOURCE_SUBTITLE_SUFFIX = os.environ.get("SOURCE_SUBTITLE_SUFFIX", f".{SOURCE_LANG}.srt")
 TARGET_SUBTITLE_SUFFIX = os.environ.get("TARGET_SUBTITLE_SUFFIX", f".{TARGET_LANG}.srt")
 
+# Optional Bitmap (PGS/SUP) Subtitle OCR stage
+ENABLE_PGS_OCR = os.environ.get("ENABLE_PGS_OCR", "0") == "1"
+
 PROCESS_EXISTING_SOURCE_ONLY = (
     os.environ.get("PROCESS_EXISTING_SOURCE_ONLY", "0") == "1"
     or os.environ.get("PROCESS_EXISTING_EN_ONLY", "0") == "1"
@@ -147,7 +150,8 @@ def get_subtitle_tracks(mkv_file):
                     "id": track.get("id"),
                     "codec": track.get("codec"),
                     "language": track.get("properties", {}).get("language"),
-                    "track_name": track.get("properties", {}).get("track_name")
+                    "track_name": track.get("properties", {}).get("track_name"),
+                    "forced": bool(track.get("properties", {}).get("forced_track")),
                 })
         return subtitle_tracks
     except subprocess.TimeoutExpired:
@@ -341,10 +345,33 @@ def process_file(mkv_file):
                     break
 
         if not source_text_track and sup_tracks:
-            with open(SUP_LOG_FILE, "a") as log:
-                log.write(f"{mkv_file}\n")
-            logging.info("File with bitmap/SUP subtitles logged for review: %s", mkv_file)
-            return
+            if ENABLE_PGS_OCR:
+                try:
+                    from pgs_ocr import ocr_mkv_track, is_ocr_available
+                    if is_ocr_available():
+                        best_sup = next((t for t in sup_tracks if not t.get("forced")), sup_tracks[0])
+                        logging.info("ENABLE_PGS_OCR enabled. Attempting OCR on track ID %s (%s)...", best_sup["id"], best_sup.get("track_name", ""))
+                        if ocr_mkv_track(mkv_file, best_sup["id"], source_subtitle, lang_code=SOURCE_LANG, work_dir=TEMP_DIR):
+                            logging.info("OCR generated %s successfully.", source_subtitle)
+                        else:
+                            with open(SUP_LOG_FILE, "a") as log:
+                                log.write(f"{mkv_file}\n")
+                            return
+                    else:
+                        logging.warning("ENABLE_PGS_OCR is enabled, but pgsrip/mkvextract is missing. Logging to SUP file.")
+                        with open(SUP_LOG_FILE, "a") as log:
+                            log.write(f"{mkv_file}\n")
+                        return
+                except ImportError:
+                    logging.warning("pgs_ocr module not found. Logging to SUP file.")
+                    with open(SUP_LOG_FILE, "a") as log:
+                        log.write(f"{mkv_file}\n")
+                    return
+            else:
+                with open(SUP_LOG_FILE, "a") as log:
+                    log.write(f"{mkv_file}\n")
+                logging.info("File with bitmap/SUP subtitles logged for review: %s", mkv_file)
+                return
 
         if not source_text_track:
             logging.info("No source text subtitle (%s) found in %s", SOURCE_LANG, mkv_file)

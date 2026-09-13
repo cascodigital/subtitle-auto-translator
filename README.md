@@ -132,10 +132,25 @@ Example (runs daily at 03:00):
 1. **Scan**: Recursively inspects `/movies`, `/tv`, and any paths listed in `EXTRA_MEDIA_DIRS`.
 2. **Check**: Checks if the target language subtitle already exists (e.g. `.pt-BR.srt` or embedded in the MKV).
 3. **Extraction**: If missing, inspects MKV tracks and extracts the source text track (e.g. `.en.srt`) using `mkvextract`.
-   - *Note: Image-based PGS/SUP subtitles cannot be directly extracted as text and are logged to `/app/temp/legendassup.txt` for manual review.*
+   - *If only bitmap PGS/SUP tracks are found*: If `ENABLE_PGS_OCR=1`, it automatically extracts the stream, runs OCR via Tesseract/pgsrip, and verifies text through a dictionary quality gate. If disabled, it logs to `/app/temp/legendassup.txt` for manual review.
 4. **Batch Translation**: Batches subtitle cues and translates via the Gemini API, preserving cue numbering, line breaks, formatting tags, and timestamps.
 5. **Fallback**: If Gemini encounters an issue, it gracefully routes cues to the local LibreTranslate service.
 6. **Save**: Writes the translated `.srt` alongside the media file.
+
+---
+
+## Bitmap Subtitles (PGS / SUP) OCR
+
+Many Blu-ray rips, Remuxes, and anime releases only contain image-based bitmap subtitles (**PGS / SUP** format) rather than text tracks. 
+
+This project includes an integrated OCR pipeline powered by `pgsrip` and `tesseract-ocr`:
+
+> [!IMPORTANT]
+> **Hardware & Memory Notice:**
+> Subtitle OCR requires rendering and analyzing high-resolution bitmaps, which can consume **1.5 GB to 3.0 GB of RAM** during peak processing.
+> * **Default behavior:** `ENABLE_PGS_OCR=0` (disabled). This ensures safe operation on low-RAM single-board computers (Raspberry Pi, Orange Pi, lightweight VPS) without risk of Out-Of-Memory (OOM) kills.
+> * **To enable:** If your host machine has sufficient RAM (e.g., standard x86 servers, desktop PCs, or NAS with 4GB+ RAM), set `ENABLE_PGS_OCR=1` in your `.env`.
+> * **Lexical Quality Gate:** To prevent OCR noise and corrupt subtitles from being sent to Gemini, recognized tokens are verified against a system dictionary (`/usr/share/dict/words`). Sample files, forced-only foreign dialogue tracks, and garbled output are safely rejected.
 
 ---
 
@@ -156,6 +171,9 @@ All settings can be customized in your `.env` file:
 | `TARGET_LANG_NAME` | `Brazilian Portuguese` | Target language name for the Gemini prompt |
 | `LIBRETRANSLATE_SOURCE` | `en` | ISO source language code for LibreTranslate |
 | `LIBRETRANSLATE_TARGET` | `pt` | ISO target language code for LibreTranslate |
+| `ENABLE_PGS_OCR` | `0` | Enable bitmap PGS/SUP OCR (`1` = enabled, `0` = disabled) |
+| `PGS_MIN_CUES` | `80` | Minimum cue count required by the OCR quality gate |
+| `PGS_MAX_BAD_PCT` | `15.0` | Maximum percentage of unrecognized dictionary words before rejecting OCR |
 | `PROCESS_EXISTING_SOURCE_ONLY` | `0` | If `1`, only translates existing `.en.srt` files on disk (skips MKV scan) |
 | `EXTRA_MEDIA_DIRS` | `""` | Additional colon-separated folders to scan (e.g. `/anime:/documentaries`) |
 
