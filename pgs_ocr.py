@@ -118,8 +118,8 @@ def ocr_mkv_track(
     temp_folder.mkdir(parents=True, exist_ok=True)
 
     pid = os.getpid()
-    sup_path = temp_folder / f"extract_{pid}.sup"
-    temp_srt_path = temp_folder / f"extract_{pid}.srt"
+    sup_path = temp_folder / f"extract_{pid}.{lang_code}.sup"  # pgsrip infere idioma do NOME; sem sufixo IETF ele filtra o arquivo
+    temp_srt_path = temp_folder / f"extract_{pid}.{lang_code}.srt"
 
     for f in (sup_path, temp_srt_path):
         if f.exists():
